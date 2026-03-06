@@ -10,11 +10,43 @@ from datetime import datetime
 import os
 import json
 
+# ============================================
+# 🔥 FIX TESSERACT PATH FOR RAILWAY
+# ============================================
+try:
+    # Explicitly set Tesseract path for Railway
+    pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
+    
+    # Check if tesseract exists
+    if os.path.exists('/usr/bin/tesseract'):
+        print("✅ Tesseract found at /usr/bin/tesseract")
+    else:
+        print("⚠️ Tesseract not found at /usr/bin/tesseract")
+        
+    # Set TESSDATA_PREFIX for language files
+    possible_paths = [
+        '/usr/share/tesseract-ocr/5/tessdata/',
+        '/usr/share/tesseract-ocr/4.00/tessdata/',
+        '/usr/share/tesseract-ocr/tessdata/'
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            os.environ['TESSDATA_PREFIX'] = path
+            print(f"✅ TESSDATA_PREFIX set to {path}")
+            break
+except Exception as e:
+    print(f"⚠️ Error setting Tesseract path: {e}")
+
+# ============================================
 # 🔥 CONFIG - Environment variables se lo
+# ============================================
 BOT_TOKEN = os.environ.get('BOT_TOKEN', "8601876917:AAFuvwzoWbBsUZr26Q-svPnsxcdYop-yYds")
 ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID', "-1003804079056")  # Aapka Telegram ID
 
-# 🔥 Firebase setup with environment variable
+# ============================================
+# 🔥 FIREBASE SETUP with environment variable
+# ============================================
 try:
     # Pehle env variable se try karo
     firebase_creds_json = os.environ.get('FIREBASE_CREDS')
@@ -33,9 +65,10 @@ try:
     
 except Exception as e:
     print(f"❌ Firebase connection error: {e}")
-    # Continue without Firebase? Bot will still work but verification will fail
-    firebase_available = False
 
+# ============================================
+# 🔥 INITIALIZE BOT
+# ============================================
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # User state
@@ -139,11 +172,11 @@ def process_video(user_id, video_path, message):
                     email_date = email_date_match.group(1)
             
             # Collect email text
-            if "Few AI courses" in text or "Read Online" in text:
+            if "Read Online" in text or "March 06" in text or "When You Drink Water" in text:
                 email_text += text + "\n"
             
             # Collect ad text
-            if "DeepView" in text or "OpenAI" in text:
+            if "Elite Trade Club" in text or "Click to subscribe" in text:
                 ad_text += text + "\n"
         
         # Verify with Firebase
@@ -235,10 +268,14 @@ def extract_frames(video_path, timestamps):
 
 def extract_text_from_frame(frame):
     """Extract text from frame using OCR"""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
-    text = pytesseract.image_to_string(thresh)
-    return text
+    try:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+        text = pytesseract.image_to_string(thresh)
+        return text
+    except Exception as e:
+        print(f"OCR Error: {e}")
+        return ""
 
 # ============================================
 # VERIFICATION FUNCTIONS
@@ -396,33 +433,16 @@ def admin_stats(message):
     if message.chat.id != int(ADMIN_CHAT_ID):
         return
     
-    # Get today's verifications from Firebase
-    ref = db.reference('verifications')
-    verifications = ref.get() or {}
-    
-    today = datetime.now().strftime('%Y-%m-%d')
-    today_count = 0
-    total_coins = 0
-    
-    for vid, vdata in verifications.items():
-        if vdata.get('date') == today:
-            today_count += 1
-            total_coins += vdata.get('coins', 0)
-    
-    bot.send_message(message.chat.id, f"""
-📊 STATS
-━━━━━━━━━━━━━━
-Today's Verifications: {today_count}
-Total Coins Given: {total_coins}
-    """)
+    bot.send_message(message.chat.id, "📊 Bot is running! Check Firebase for stats.")
 
 # ============================================
 # START BOT
 # ============================================
+print("=" * 50)
 print("🤖 Video Verification Bot Started...")
-print(f"Admin Chat ID: {ADMIN_CHAT_ID}")
-print(f"Bot Token: {BOT_TOKEN[:10]}...")
-print("=" * 40)
+print(f"✅ Admin Chat ID: {ADMIN_CHAT_ID}")
+print(f"✅ Bot Token: {BOT_TOKEN[:10]}...")
+print("=" * 50)
 
 # Start bot
 try:
