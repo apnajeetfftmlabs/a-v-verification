@@ -1,6 +1,9 @@
 {
   "build": {
     "builder": "NIXPACKS",
-    "nixPkgs": ["tesseract", "tesseract.eng", "opencv", "ffmpeg"]
+    "nixPkgs": ["tesseract", "tesseract.eng", "opencv", "ffmpeg"],
+    "python": {
+      "version": "3.11"
+    }
   }
 }
