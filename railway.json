@@ -4,12 +4,19 @@
     "nixPkgs": [
       "tesseract",
       "tesseract.eng",
-      "opencv",
-      "ffmpeg",
+      "openssl",
+      "pkg-config",
       "libGL",
-      "libglvnd",
-      "libGLU",
-      "libxcb"
+      "mesa",
+      "ffmpeg"
+    ],
+    "aptPkgs": [
+      "tesseract-ocr",
+      "tesseract-ocr-eng",
+      "libtesseract-dev",
+      "libleptonica-dev",
+      "libgl1-mesa-glx",
+      "libglib2.0-0"
     ],
     "python": {
       "version": "3.11"
