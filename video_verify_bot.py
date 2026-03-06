@@ -8,16 +8,33 @@ import re
 import time
 from datetime import datetime
 import os
+import json
 
-# 🔥 CONFIG
-BOT_TOKEN = "8601876917:AAFuvwzoWbBsUZr26Q-svPnsxcdYop-yYds"
-ADMIN_CHAT_ID = "-1003804079056"  # Aapka Telegram ID
+# 🔥 CONFIG - Environment variables se lo
+BOT_TOKEN = os.environ.get('BOT_TOKEN', "8601876917:AAFuvwzoWbBsUZr26Q-svPnsxcdYop-yYds")
+ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID', "-1003804079056")  # Aapka Telegram ID
 
-# Firebase setup
-cred = credentials.Certificate("serviceAccountKey.json")
-firebase_admin.initialize_app(cred, {
-    'databaseURL': 'https://apnajeet-email-default-rtdb.firebaseio.com/'
-})
+# 🔥 Firebase setup with environment variable
+try:
+    # Pehle env variable se try karo
+    firebase_creds_json = os.environ.get('FIREBASE_CREDS')
+    if firebase_creds_json:
+        firebase_creds = json.loads(firebase_creds_json)
+        cred = credentials.Certificate(firebase_creds)
+        print("✅ Firebase connected using environment variable")
+    else:
+        # Fallback: local file (development ke liye)
+        cred = credentials.Certificate("serviceAccountKey.json")
+        print("⚠️ Using local serviceAccountKey.json (development mode)")
+    
+    firebase_admin.initialize_app(cred, {
+        'databaseURL': 'https://apnajeet-email-default-rtdb.firebaseio.com/'
+    })
+    
+except Exception as e:
+    print(f"❌ Firebase connection error: {e}")
+    # Continue without Firebase? Bot will still work but verification will fail
+    firebase_available = False
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -138,7 +155,7 @@ def process_video(user_id, video_path, message):
             admin_message = f"""
 ✅ VERIFICATION SUCCESSFUL
 ━━━━━━━━━━━━━━━━━━━━━━
-👤 User: @{user_state[user_id]['username']} ({user_state[user_id]['name']})
+👤 User: @{user_state[user_id]['username'] or 'N/A'} ({user_state[user_id]['name']})
 🆔 Player ID: {player_id}
 📅 Profile Date: {profile_date}
 📧 Email Date: {email_date}
@@ -169,7 +186,7 @@ Thank you for your patience!
             admin_message = f"""
 ❌ VERIFICATION FAILED
 ━━━━━━━━━━━━━━━━━━
-👤 User: @{user_state[user_id]['username']}
+👤 User: @{user_state[user_id]['username'] or 'N/A'}
 🆔 Player ID: {player_id or 'Not found'}
 ❌ Reason: {verification_result['reason']}
 
@@ -385,19 +402,18 @@ def admin_stats(message):
     
     today = datetime.now().strftime('%Y-%m-%d')
     today_count = 0
-    pending = []
+    total_coins = 0
     
     for vid, vdata in verifications.items():
         if vdata.get('date') == today:
             today_count += 1
-        if vdata.get('status') == 'pending':
-            pending.append(vdata.get('player_id'))
+            total_coins += vdata.get('coins', 0)
     
     bot.send_message(message.chat.id, f"""
 📊 STATS
 ━━━━━━━━━━━━━━
 Today's Verifications: {today_count}
-Pending Approvals: {len(pending)}
+Total Coins Given: {total_coins}
     """)
 
 # ============================================
@@ -405,4 +421,13 @@ Pending Approvals: {len(pending)}
 # ============================================
 print("🤖 Video Verification Bot Started...")
 print(f"Admin Chat ID: {ADMIN_CHAT_ID}")
-bot.infinity_polling()
+print(f"Bot Token: {BOT_TOKEN[:10]}...")
+print("=" * 40)
+
+# Start bot
+try:
+    bot.infinity_polling()
+except Exception as e:
+    print(f"❌ Bot polling error: {e}")
+    time.sleep(5)
+    bot.infinity_polling()  # Retry
