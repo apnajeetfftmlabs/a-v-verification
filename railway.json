@@ -1,0 +1,6 @@
+{
+  "build": {
+    "builder": "NIXPACKS",
+    "nixPkgs": ["tesseract", "tesseract.eng", "opencv", "ffmpeg"]
+  }
+}
