@@ -2,7 +2,7 @@ setuptools==69.0.0
 wheel==0.42.0
 pytelegrambotapi==4.16.1
 firebase-admin==6.2.0
-opencv-python==4.8.1.78
+opencv-python-headless==4.8.1.78   # ⬅️ YEH CHANGE KARO
 pytesseract==0.3.10
 Pillow==10.1.0
 numpy==1.26.0
