@@ -13,8 +13,11 @@ BOT_TOKEN = "8601876917:AAFuvwzoWbBsUZr26Q-svPnsxcdYop-yYds"
 ADMIN_CHAT_ID = "-1003804079056"
 
 # Hugging Face Space URL
+# Line 11-12 mein yeh change karo:
+
+# ✅ Updated URL (remove extra /gradio_api)
 HF_SPACE_URL = "https://dailyupdate8399-apnajeet-video-verifier.hf.space"
-HF_API_URL = f"{HF_SPACE_URL}/gradio_api/call/predict"
+HF_API_URL = f"{HF_SPACE_URL}/gradio_api/call/predict"  # ✅ Yeh sahi hai
 
 bot = telebot.TeleBot(BOT_TOKEN)
 user_state = {}
@@ -231,3 +234,4 @@ if __name__ == "__main__":
     
     print("\n🟢 Bot is running...")
     bot.infinity_polling(timeout=60)
+
