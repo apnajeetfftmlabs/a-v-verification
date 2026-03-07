@@ -2,7 +2,7 @@ import telebot
 import firebase_admin
 from firebase_admin import db, credentials
 import cv2
-import pytesseract  # ✅ Change here
+import pytesseract
 import numpy as np
 import re
 import time
@@ -65,9 +65,10 @@ def verify_start(message):
     user_state[user_id] = {
         'step': 'waiting_video',
         'username': message.from_user.username,
-        'name': message.from_user.full_name
+        'name': message.from_user.full_name,
+        'retry_count': 0
     }
-    bot.reply_to(message, "🎥 Send your screen recording video")
+    bot.reply_to(message, "🎥 Send your screen recording video (30-60 seconds)")
 
 # ============================================
 # RECEIVE VIDEO
@@ -80,7 +81,7 @@ def handle_video(message):
         bot.reply_to(message, "Please start with /verify first")
         return
     
-    bot.reply_to(message, "📥 Video received! Processing...")
+    bot.reply_to(message, "📥 Video received! Processing... This may take 30-60 seconds.")
     
     # Download video
     file_id = message.video.file_id
@@ -97,12 +98,48 @@ def handle_video(message):
     process_video(user_id, video_path, message)
 
 def extract_text_from_frame(frame):
-    """Extract text using pytesseract"""
+    """Enhanced text extraction with better preprocessing"""
     try:
+        # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # Multiple preprocessing techniques
+        texts = []
+        
+        # 1. Original grayscale
+        text1 = pytesseract.image_to_string(gray, config='--psm 6')
+        texts.append(text1)
+        
+        # 2. Thresholding
         _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
-        text = pytesseract.image_to_string(thresh)
-        return text
+        text2 = pytesseract.image_to_string(thresh, config='--psm 6')
+        texts.append(text2)
+        
+        # 3. Adaptive thresholding (better for varying lighting)
+        thresh2 = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                        cv2.THRESH_BINARY, 11, 2)
+        text3 = pytesseract.image_to_string(thresh2, config='--psm 6')
+        texts.append(text3)
+        
+        # 4. Increase contrast
+        enhanced = cv2.equalizeHist(gray)
+        text4 = pytesseract.image_to_string(enhanced, config='--psm 6')
+        texts.append(text4)
+        
+        # 5. Resize (make larger)
+        height, width = gray.shape
+        if height < 500:
+            scale = 2.0
+            new_width = int(width * scale)
+            new_height = int(height * scale)
+            resized = cv2.resize(gray, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+            text5 = pytesseract.image_to_string(resized, config='--psm 6')
+            texts.append(text5)
+        
+        # Combine all texts
+        combined = " ".join(texts)
+        return combined
+        
     except Exception as e:
         print(f"OCR Error: {e}")
         return ""
@@ -110,8 +147,22 @@ def extract_text_from_frame(frame):
 def process_video(user_id, video_path, message):
     """Extract and verify without requiring player ID in Firebase"""
     try:
-        # Extract frames
-        frames = extract_frames(video_path, [5, 10, 15, 20, 25, 30, 35, 40, 45, 50])
+        # Get video duration
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration = frame_count / fps
+        cap.release()
+        
+        print(f"Video duration: {duration:.1f} seconds")
+        
+        # Extract frames - har second ka frame
+        timestamps = []
+        for i in range(1, int(duration)):
+            timestamps.append(i)
+        
+        frames = extract_frames(video_path, timestamps)
+        print(f"Extracted {len(frames)} frames")
         
         # Initialize extracted data
         extracted_data = {
@@ -124,35 +175,55 @@ def process_video(user_id, video_path, message):
         }
         
         # Process each frame
+        frame_count = 0
         for frame in frames:
+            frame_count += 1
             text = extract_text_from_frame(frame)
             
             # Skip if no text
-            if not text:
+            if not text or len(text) < 10:
                 continue
             
-            # 1. Extract Player ID (10 digits)
+            print(f"Frame {frame_count}: Found {len(text)} chars")
+            
+            # 1. Extract Player ID (10 digits) - MULTIPLE PATTERNS
             if not extracted_data['player_id']:
+                # Try multiple patterns
                 patterns = [
-                    r'(\d{10})',
-                    r'ID[:\s]*(\d{10})',
-                    r'Player[:\s]*ID[:\s]*(\d{10})',
+                    r'(\d{10})',  # 1234567890
+                    r'(\d{3}[-.\s]?\d{3}[-.\s]?\d{4})',  # 123-456-7890
+                    r'ID[:\s]*(\d{10})',  # ID: 1234567890
+                    r'Player[:\s]*ID[:\s]*(\d{10})',  # Player ID: 1234567890
+                    r'(\d{3}[-]\d{3}[-]\d{4})',  # 123-456-7890 with dash
                 ]
+                
                 for pattern in patterns:
                     match = re.search(pattern, text, re.IGNORECASE)
                     if match:
-                        extracted_data['player_id'] = re.sub(r'[^0-9]', '', match.group(1))
-                        print(f"✅ Found Player ID: {extracted_data['player_id']}")
-                        break
+                        # Clean up - remove non-digits
+                        candidate = re.sub(r'[^0-9]', '', match.group(1))
+                        if len(candidate) >= 10:
+                            extracted_data['player_id'] = candidate[:10]  # Take first 10 digits
+                            print(f"✅ Found Player ID: {extracted_data['player_id']} (pattern: {pattern})")
+                            break
+                
+                # If still not found, try to find any 10-digit number
+                if not extracted_data['player_id']:
+                    all_numbers = re.findall(r'\d+', text)
+                    for num in all_numbers:
+                        if len(num) == 10:
+                            extracted_data['player_id'] = num
+                            print(f"✅ Found Player ID (any 10-digit): {extracted_data['player_id']}")
+                            break
             
-            # 2. Extract Profile Date
+            # 2. Extract Profile Date (DD/MM/YYYY)
             if not extracted_data['profile_date']:
                 date_match = re.search(r'(\d{2}[/-]\d{2}[/-]\d{4})', text)
                 if date_match:
                     extracted_data['profile_date'] = date_match.group(1).replace('-', '/')
                     print(f"✅ Found Profile Date: {extracted_data['profile_date']}")
             
-            # 3. Extract Email Date
+            # 3. Extract Email Date (Month DD, YYYY)
             if not extracted_data['email_date']:
                 email_date_match = re.search(r'([A-Z][a-z]+ \d{1,2}, \d{4})', text)
                 if email_date_match:
@@ -160,18 +231,23 @@ def process_video(user_id, video_path, message):
                     print(f"✅ Found Email Date: {extracted_data['email_date']}")
             
             # 4. Collect email lines
-            keywords = ['gold', 'stansberry', 'cramer', 'investment', 'stock', 'dear reader']
+            keywords = ['gold', 'stansberry', 'cramer', 'investment', 'stock', 'dear reader', 
+                        'market', 'trade', 'club', 'elite', 'price']
             if any(keyword in text.lower() for keyword in keywords):
-                lines = [line.strip() for line in text.split('\n') if len(line.strip()) > 10]
+                lines = [line.strip() for line in text.split('\n') if len(line.strip()) > 15]
                 extracted_data['email_lines'].extend(lines)
             
             # 5. Collect ad text
-            ad_keywords = ['elite trade club', 'start your day', 'pre-market report']
+            ad_keywords = ['elite trade club', 'start your day', 'pre-market report', 
+                          'closing bell', 'subscribe', 'newsletter']
             if any(keyword in text.lower() for keyword in ad_keywords):
                 extracted_data['ad_text'] += text + "\n"
         
         # Remove duplicates
         extracted_data['email_lines'] = list(dict.fromkeys(extracted_data['email_lines']))
+        
+        print(f"Extracted: Player ID={extracted_data['player_id']}, Profile Date={extracted_data['profile_date']}, Email Date={extracted_data['email_date']}")
+        print(f"Email lines: {len(extracted_data['email_lines'])}")
         
         # Verify with Firebase
         verification_result = verify_extracted_data(extracted_data)
@@ -200,17 +276,34 @@ def process_video(user_id, video_path, message):
 Player ID: {extracted_data['player_id']}
 Match Score: {verification_result['match_score']}%
 
-Admin will add coins.
+Admin will add coins within 24 hours.
+Thank you for your patience!
             """)
         else:
+            # Send failure to admin for manual check
+            admin_msg = f"""
+❌ VERIFICATION FAILED
+━━━━━━━━━━━━━━━━━━
+👤 User: @{user_state[user_id]['username'] or 'N/A'}
+🆔 Player ID: {extracted_data['player_id'] or 'Not found'}
+📅 Profile Date: {extracted_data['profile_date'] or 'Not found'}
+📧 Email Date: {extracted_data['email_date'] or 'Not found'}
+❌ Reason: {verification_result['reason']}
+
+Check video manually if needed.
+            """
+            bot.send_message(ADMIN_CHAT_ID, admin_msg)
+            
             bot.send_message(user_id, f"""
 ❌ VERIFICATION FAILED
 Reason: {verification_result['reason']}
 
 Please record again showing:
-• Profile screen clearly
-• Full email content
-• Ad page
+• Profile screen clearly (zoom if needed)
+• Full email content (scroll slowly)
+• Ad page after clicking link
+
+If problem persists, contact admin.
             """)
         
         # Cleanup
@@ -218,7 +311,7 @@ Please record again showing:
         user_state.pop(user_id, None)
         
     except Exception as e:
-        bot.send_message(user_id, "❌ Error. Please try again.")
+        bot.send_message(user_id, "❌ Error processing video. Please try again.")
         bot.send_message(ADMIN_CHAT_ID, f"⚠️ Error: {str(e)}")
         print(f"Error: {e}")
 
@@ -229,17 +322,20 @@ def verify_extracted_data(extracted):
     """Match extracted data with Firebase templates"""
     
     # Check required fields
-    if not extracted['player_id'] or len(extracted['player_id']) != 10:
-        return {'verified': False, 'reason': 'Player ID not clear (need 10 digits)'}
+    if not extracted['player_id']:
+        return {'verified': False, 'reason': 'Player ID not found - make sure 10-digit number is visible'}
+    
+    if len(extracted['player_id']) != 10:
+        return {'verified': False, 'reason': f'Player ID should be 10 digits, got {len(extracted["player_id"])}'}
     
     if not extracted['profile_date']:
-        return {'verified': False, 'reason': 'Profile date not found'}
+        return {'verified': False, 'reason': 'Profile date not found - show DD/MM/YYYY'}
     
     if not extracted['email_date']:
-        return {'verified': False, 'reason': 'Email date not found'}
+        return {'verified': False, 'reason': 'Email date not found - show Month DD, YYYY'}
     
     if len(extracted['email_lines']) < 3:
-        return {'verified': False, 'reason': f'Only {len(extracted["email_lines"])} lines found'}
+        return {'verified': False, 'reason': f'Only {len(extracted["email_lines"])} email lines found - need at least 3'}
     
     # Get templates from Firebase
     today = datetime.now().strftime('%Y-%m-%d')
@@ -250,7 +346,7 @@ def verify_extracted_data(extracted):
     ad_template = ad_ref.get()
     
     if not email_template:
-        return {'verified': False, 'reason': 'No template for today'}
+        return {'verified': False, 'reason': 'No email template found for today'}
     
     # Match email lines
     template_lines = email_template.get('lines', [])
@@ -273,7 +369,7 @@ def verify_extracted_data(extracted):
                     matching_lines.append(t_line)
                     break
     
-    # Date match
+    # Date match (allow ±1 day)
     date_match = dates_match(extracted['profile_date'], extracted['email_date'])
     
     # Ad page match
@@ -300,11 +396,11 @@ def verify_extracted_data(extracted):
     else:
         reasons = []
         if match_score < 20:
-            reasons.append("Email mismatch")
+            reasons.append(f"Email mismatch ({round(match_score,1)}%)")
         if not date_match:
             reasons.append("Date mismatch")
         if not ad_match:
-            reasons.append("Ad mismatch")
+            reasons.append("Ad page mismatch")
         
         return {'verified': False, 'reason': ', '.join(reasons)}
 
@@ -318,6 +414,8 @@ def extract_frames(video_path, timestamps):
     
     for ts in timestamps:
         frame_number = int(ts * fps)
+        if frame_number < 0:
+            continue
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
         ret, frame = cap.read()
         if ret:
@@ -332,7 +430,8 @@ def dates_match(profile_date, email_date):
         email = datetime.strptime(email_date, '%B %d, %Y')
         diff = abs((profile - email).days)
         return diff <= 1
-    except:
+    except Exception as e:
+        print(f"Date match error: {e}")
         return False
 
 # ============================================
@@ -341,9 +440,10 @@ def dates_match(profile_date, email_date):
 @bot.message_handler(commands=['upload_email'])
 def admin_upload_email(message):
     if message.chat.id != int(ADMIN_CHAT_ID):
+        bot.reply_to(message, "❌ Unauthorized")
         return
     
-    msg = bot.reply_to(message, "Paste email content:")
+    msg = bot.reply_to(message, "📧 Paste today's email content:")
     bot.register_next_step_handler(msg, save_email)
 
 def save_email(message):
@@ -358,19 +458,27 @@ def save_email(message):
         'uploaded_at': time.time()
     })
     
-    bot.reply_to(message, f"✅ Saved! {len(lines)} lines")
+    bot.reply_to(message, f"✅ Saved! {len(lines)} lines for {today}")
+
+@bot.message_handler(commands=['stats'])
+def admin_stats(message):
+    if message.chat.id != int(ADMIN_CHAT_ID):
+        return
+    
+    bot.send_message(message.chat.id, "📊 Bot is running normally!")
 
 # ============================================
 # START BOT
 # ============================================
-print("=" * 40)
-print("🤖 Bot Started with Pytesseract")
-print(f"✅ Admin: {ADMIN_CHAT_ID}")
-print("=" * 40)
+print("=" * 50)
+print("🤖 ApnaJeet Video Verification Bot")
+print("✅ Version: 2.0 (Enhanced OCR)")
+print(f"✅ Admin Chat ID: {ADMIN_CHAT_ID}")
+print("=" * 50)
 
 try:
-    bot.infinity_polling()
+    bot.infinity_polling(timeout=60, long_polling_timeout=60)
 except Exception as e:
-    print(f"Error: {e}")
+    print(f"❌ Bot polling error: {e}")
     time.sleep(5)
     bot.infinity_polling()
