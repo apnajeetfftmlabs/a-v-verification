@@ -4,8 +4,7 @@
     "nixPkgs": [
       "python311",
       "openssl",
-      "pkg-config",
-      "libstdcxx5"
+      "pkg-config"
     ],
     "python": {
       "version": "3.11"
