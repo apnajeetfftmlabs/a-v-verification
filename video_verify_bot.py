@@ -4,6 +4,7 @@ import os
 import time
 import json
 from datetime import datetime
+import re
 
 # ============================================
 # 🔥 CONFIG - FIXED URL
@@ -73,7 +74,6 @@ def handle_profile_date(message):
     date_str = message.text.strip()
     
     # Check date format (DD/MM/YYYY)
-    import re
     date_pattern = r'^(\d{2})/(\d{2})/(\d{4})$'
     match = re.match(date_pattern, date_str)
     
@@ -112,70 +112,81 @@ def handle_video(message):
         file_info = bot.get_file(file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         
-        # Save temp video
+        # Save temp video with safe name
         temp_video = f"temp_{user_id}_{int(time.time())}.mp4"
         with open(temp_video, 'wb') as f:
             f.write(downloaded_file)
         
-        # Send to Hugging Face Space with correct endpoint
+        # Send to Hugging Face Space
         with open(temp_video, 'rb') as f:
             files = {'data': ('video.mp4', f, 'video/mp4')}
             response = requests.post(HF_SPACE_URL, files=files, timeout=60)
         
         # Parse result
         if response.status_code == 200:
-            # Gradio 5.x returns event_id first, then we need to get result
+            # Gradio 5.x returns event_id first
             event_id = response.text.strip()
             
             # Get the actual result
-            result_url = f"https://dailyupdate8399-apnajeet-video-verifier.hf.space/gradio_api/call/predict/{event_id}"
-            result_response = requests.get(result_url)
+            base_url = "https://dailyupdate8399-apnajeet-video-verifier.hf.space"
+            result_url = f"{base_url}/gradio_api/call/predict/{event_id}"
+            result_response = requests.get(result_url, timeout=30)
             
+            ai_result = "No result"
             if result_response.status_code == 200:
-                result_data = result_response.json()
-                ai_result = str(result_data)
+                try:
+                    result_data = result_response.json()
+                    ai_result = json.dumps(result_data, indent=2)
+                except:
+                    ai_result = result_response.text[:200]
             else:
-                ai_result = "Could not fetch result"
+                ai_result = f"Error fetching result: {result_response.status_code}"
             
-            # Combine with manual data
-            final_result = f"""
-✅ VERIFICATION RESULT
-━━━━━━━━━━━━━━━━━━━━━━
-👤 Manual Player ID: {user_state[user_id]['player_id']}
-📅 Manual Profile Date: {user_state[user_id]['profile_date']}
-🤖 AI Detection: {ai_result}
-
-⏰ {datetime.now().strftime('%H:%M:%S')}
-
-👉 Add 10 coins if matches
-            """
+            # ✅ FIX: Truncate AI result to avoid 414 error
+            ai_result_short = ai_result[:150] + "..." if len(ai_result) > 150 else ai_result
+            
+            # Combine with manual data - keep it SHORT
+            final_result = f"""✅ VERIFICATION
+👤 ID: {user_state[user_id]['player_id']}
+📅 Date: {user_state[user_id]['profile_date']}
+🤖 AI: {ai_result_short}
+⏰ {datetime.now().strftime('%H:%M')}"""
             
             # Send to admin group
             bot.send_message(ADMIN_CHAT_ID, final_result)
             
             # Send to user
-            bot.send_message(user_id, f"""
-✅ VIDEO PROCESSED!
+            user_msg = f"""✅ VIDEO PROCESSED!
 
-AI Result: {ai_result[:100]}...
+Your Player ID: {user_state[user_id]['player_id']}
+Profile Date: {user_state[user_id]['profile_date']}
 
-Admin will verify and add coins.
-            """)
+Admin will verify and add coins within 24 hours.
+Thank you for your patience!"""
+            
+            bot.send_message(user_id, user_msg)
+            
         else:
-            bot.send_message(user_id, "❌ AI service error. Please try again later.")
-            bot.send_message(ADMIN_CHAT_ID, f"❌ HF Space error: {response.status_code} - {response.text}")
+            error_msg = f"❌ HF Error: {response.status_code}"
+            bot.send_message(user_id, error_msg)
+            bot.send_message(ADMIN_CHAT_ID, f"{error_msg} - {response.text[:100]}")
         
         # Cleanup
-        os.remove(temp_video)
-        user_state.pop(user_id, None)
+        if os.path.exists(temp_video):
+            os.remove(temp_video)
+        if user_id in user_state:
+            user_state.pop(user_id, None)
         
     except requests.exceptions.Timeout:
         bot.send_message(user_id, "❌ AI processing timeout (60 seconds). Please try again.")
     except Exception as e:
-        bot.send_message(user_id, f"❌ Error: {str(e)}")
-        bot.send_message(ADMIN_CHAT_ID, f"⚠️ Error: {str(e)}")
+        error_text = str(e)[:100]
+        bot.send_message(user_id, f"❌ Error: {error_text}")
+        bot.send_message(ADMIN_CHAT_ID, f"⚠️ Error: {error_text}")
         if os.path.exists(temp_video):
             os.remove(temp_video)
+        if user_id in user_state:
+            user_state.pop(user_id, None)
 
 # ============================================
 # ADMIN COMMANDS
@@ -189,7 +200,7 @@ def admin_status(message):
 📊 BOT STATUS
 ━━━━━━━━━━━━━━━━
 ✅ Bot: Running
-✅ Hugging Face: {HF_SPACE_URL}
+✅ Hugging Face: Active
 ✅ Active users: {len(user_state)}
     """)
 
@@ -213,7 +224,8 @@ if __name__ == "__main__":
     
     # Test HF Space connection
     try:
-        test_response = requests.get("https://dailyupdate8399-apnajeet-video-verifier.hf.space", timeout=5)
+        test_url = "https://dailyupdate8399-apnajeet-video-verifier.hf.space"
+        test_response = requests.get(test_url, timeout=5)
         if test_response.status_code == 200:
             print("✅ Hugging Face Space is reachable")
         else:
