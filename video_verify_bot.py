@@ -7,19 +7,17 @@ from datetime import datetime
 import re
 
 # ============================================
-# 🔥 CONFIG
+# 🔥 CONFIG - DO NOT CHANGE
 # ============================================
 BOT_TOKEN = "8601876917:AAFuvwzoWbBsUZr26Q-svPnsxcdYop-yYds"
 ADMIN_CHAT_ID = "-1003804079056"
 
-# Hugging Face Space URL
-# Line 11-12 mein yeh change karo:
-
-# ✅ Updated URL (remove extra /gradio_api)
+# Hugging Face Space URL - keep this as base URL
 HF_SPACE_URL = "https://dailyupdate8399-apnajeet-video-verifier.hf.space"
-HF_API_URL = f"{HF_SPACE_URL}/gradio_api/call/predict"  # ✅ Yeh sahi hai
 
 bot = telebot.TeleBot(BOT_TOKEN)
+
+# User state for manual entry
 user_state = {}
 
 # ============================================
@@ -43,7 +41,8 @@ def verify_start(message):
     user_state[user_id] = {
         'step': 'waiting_player_id',
         'username': message.from_user.username,
-        'name': message.from_user.full_name
+        'name': message.from_user.full_name,
+        'start_time': time.time()
     }
     bot.reply_to(message, "🔢 Step 1/3: Type your 10-digit Player ID:")
 
@@ -54,6 +53,8 @@ def verify_start(message):
 def handle_player_id(message):
     user_id = message.chat.id
     player_id = message.text.strip()
+    
+    # Remove any non-digits
     player_id = ''.join(filter(str.isdigit, player_id))
     
     if len(player_id) == 10:
@@ -100,6 +101,16 @@ def handle_video(message):
         bot.reply_to(message, "Please complete steps first")
         return
     
+    # Check if Space is alive
+    try:
+        health_check = requests.get(HF_SPACE_URL, timeout=5)
+        if health_check.status_code != 200:
+            bot.reply_to(message, "❌ AI service is currently unavailable. Please try later.")
+            return
+    except:
+        bot.reply_to(message, "❌ Cannot connect to AI service. Please try later.")
+        return
+    
     bot.reply_to(message, "📥 Video received! Processing... (30-60 seconds)")
     
     try:
@@ -113,68 +124,21 @@ def handle_video(message):
         with open(temp_video, 'wb') as f:
             f.write(downloaded_file)
         
-        # Check if Space is alive first
-        try:
-            health_check = requests.get(HF_SPACE_URL, timeout=5)
-            if health_check.status_code != 200:
-                bot.reply_to(message, "❌ AI service is currently unavailable. Please try later.")
-                os.remove(temp_video)
-                return
-        except:
-            bot.reply_to(message, "❌ Cannot connect to AI service. Please try later.")
-            os.remove(temp_video)
-            return
+        # First check if we can access the Space
+        bot.send_message(ADMIN_CHAT_ID, f"📤 Processing video for user {user_id}")
         
-        # Send to Hugging Face
-        with open(temp_video, 'rb') as f:
-            files = {'data': ('video.mp4', f, 'video/mp4')}
-            response = requests.post(HF_API_URL, files=files, timeout=60)
-        
-        if response.status_code == 200:
-            event_id = response.text.strip()
-            
-            # Get result
-            result_url = f"{HF_SPACE_URL}/gradio_api/call/predict/{event_id}"
-            result_response = requests.get(result_url, timeout=30)
-            
-            ai_result = "No result"
-            if result_response.status_code == 200:
-                try:
-                    result_data = result_response.json()
-                    ai_result = json.dumps(result_data)[:150]
-                except:
-                    ai_result = result_response.text[:150]
-            
-            # Short result for message
-            ai_result_short = ai_result[:100] + "..." if len(ai_result) > 100 else ai_result
-            
-            # Send to admin
-            admin_msg = f"""✅ VERIFICATION
-👤 ID: {user_state[user_id]['player_id']}
-📅 Date: {user_state[user_id]['profile_date']}
-🤖 AI: {ai_result_short}
-⏰ {datetime.now().strftime('%H:%M')}"""
-            
-            bot.send_message(ADMIN_CHAT_ID, admin_msg)
-            
-            # Send to user
-            bot.send_message(user_id, "✅ Video processed! Admin will verify and add coins.")
-            
-        else:
-            error_msg = f"❌ HF Error: {response.status_code}"
-            bot.send_message(user_id, "❌ AI service error. Please try later.")
-            bot.send_message(ADMIN_CHAT_ID, f"{error_msg}")
+        # For now, just acknowledge receipt
+        # We'll implement actual API call once Space is fixed
+        bot.send_message(user_id, "✅ Video received! Admin will verify manually.")
+        bot.send_message(ADMIN_CHAT_ID, f"🔍 Manual verification needed for Player ID: {user_state[user_id]['player_id']}, Date: {user_state[user_id]['profile_date']}")
         
         # Cleanup
-        if os.path.exists(temp_video):
-            os.remove(temp_video)
-        if user_id in user_state:
-            user_state.pop(user_id, None)
+        os.remove(temp_video)
+        user_state.pop(user_id, None)
         
     except Exception as e:
-        error_text = str(e)[:100]
-        bot.send_message(user_id, f"❌ Error: Please try again.")
-        bot.send_message(ADMIN_CHAT_ID, f"⚠️ Error: {error_text}")
+        bot.send_message(user_id, "❌ Error. Please try again.")
+        bot.send_message(ADMIN_CHAT_ID, f"⚠️ Error: {str(e)[:100]}")
         if os.path.exists(temp_video):
             os.remove(temp_video)
         if user_id in user_state:
@@ -194,6 +158,8 @@ def admin_status(message):
         r = requests.get(HF_SPACE_URL, timeout=3)
         if r.status_code == 200:
             hf_status = "✅ Online"
+        else:
+            hf_status = f"⚠️ Error {r.status_code}"
     except:
         hf_status = "❌ Unreachable"
     
@@ -204,13 +170,6 @@ def admin_status(message):
 🤖 HF Space: {hf_status}
 👥 Active users: {len(user_state)}
     """)
-
-@bot.message_handler(commands=['restart_hf'])
-def admin_restart_hf(message):
-    if message.chat.id != int(ADMIN_CHAT_ID):
-        return
-    
-    bot.send_message(message.chat.id, "⚠️ Please restart HF Space manually from Hugging Face website.")
 
 # ============================================
 # START BOT
@@ -233,5 +192,5 @@ if __name__ == "__main__":
         print(f"⚠️ Cannot reach HF Space: {e}")
     
     print("\n🟢 Bot is running...")
+    print("📝 Commands: /start, /verify, /status")
     bot.infinity_polling(timeout=60)
-
