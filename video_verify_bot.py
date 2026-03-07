@@ -6,11 +6,13 @@ import json
 from datetime import datetime
 
 # ============================================
-# 🔥 CONFIG
+# 🔥 CONFIG - FIXED URL
 # ============================================
 BOT_TOKEN = "8601876917:AAFuvwzoWbBsUZr26Q-svPnsxcdYop-yYds"
 ADMIN_CHAT_ID = "-1003804079056"
-HF_SPACE_URL = "https://dailyupdate8399-apnajeet-video-verifier.hf.space"
+
+# ✅ FIXED: Correct Gradio 5.x API endpoint
+HF_SPACE_URL = "https://dailyupdate8399-apnajeet-video-verifier.hf.space/gradio_api/call/predict"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -115,15 +117,25 @@ def handle_video(message):
         with open(temp_video, 'wb') as f:
             f.write(downloaded_file)
         
-        # Send to Hugging Face Space
+        # Send to Hugging Face Space with correct endpoint
         with open(temp_video, 'rb') as f:
             files = {'data': ('video.mp4', f, 'video/mp4')}
             response = requests.post(HF_SPACE_URL, files=files, timeout=60)
         
         # Parse result
         if response.status_code == 200:
-            result_data = response.json()
-            ai_result = result_data.get('data', ['No result'])[0]
+            # Gradio 5.x returns event_id first, then we need to get result
+            event_id = response.text.strip()
+            
+            # Get the actual result
+            result_url = f"https://dailyupdate8399-apnajeet-video-verifier.hf.space/gradio_api/call/predict/{event_id}"
+            result_response = requests.get(result_url)
+            
+            if result_response.status_code == 200:
+                result_data = result_response.json()
+                ai_result = str(result_data)
+            else:
+                ai_result = "Could not fetch result"
             
             # Combine with manual data
             final_result = f"""
@@ -145,13 +157,13 @@ def handle_video(message):
             bot.send_message(user_id, f"""
 ✅ VIDEO PROCESSED!
 
-AI Result: {ai_result}
+AI Result: {ai_result[:100]}...
 
 Admin will verify and add coins.
             """)
         else:
             bot.send_message(user_id, "❌ AI service error. Please try again later.")
-            bot.send_message(ADMIN_CHAT_ID, f"❌ HF Space error: {response.status_code}")
+            bot.send_message(ADMIN_CHAT_ID, f"❌ HF Space error: {response.status_code} - {response.text}")
         
         # Cleanup
         os.remove(temp_video)
@@ -201,7 +213,7 @@ if __name__ == "__main__":
     
     # Test HF Space connection
     try:
-        test_response = requests.get(HF_SPACE_URL.replace('/api/predict', ''), timeout=5)
+        test_response = requests.get("https://dailyupdate8399-apnajeet-video-verifier.hf.space", timeout=5)
         if test_response.status_code == 200:
             print("✅ Hugging Face Space is reachable")
         else:
@@ -212,4 +224,3 @@ if __name__ == "__main__":
     # Start bot
     print("\n🟢 Bot is running...")
     bot.infinity_polling(timeout=60)
-
