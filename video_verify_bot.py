@@ -59,7 +59,8 @@ def start(message):
 Steps:
 1. Send /verify
 2. Type your 10-digit Player ID
-3. Send screen recording video
+3. Type Profile Date (DD/MM/YYYY)
+4. Send screen recording video
 
 Bot will verify email and ad page only.
     """)
@@ -72,7 +73,7 @@ def verify_start(message):
         'username': message.from_user.username,
         'name': message.from_user.full_name
     }
-    bot.reply_to(message, "🔢 Please type your 10-digit Player ID (from Profile screen):")
+    bot.reply_to(message, "🔢 Step 1/3: Type your 10-digit Player ID (from Profile screen):")
 
 # ============================================
 # HANDLE PLAYER ID
@@ -87,10 +88,34 @@ def handle_player_id(message):
     
     if len(player_id) == 10:
         user_state[user_id]['player_id'] = player_id
-        user_state[user_id]['step'] = 'waiting_video'
-        bot.reply_to(message, f"✅ Player ID saved: {player_id}\n\n🎥 Now send your screen recording video (30-60 seconds)")
+        user_state[user_id]['step'] = 'waiting_profile_date'
+        bot.reply_to(message, f"✅ Player ID saved: {player_id}\n\n📅 Step 2/3: Type Profile Date (DD/MM/YYYY) - example: 07/03/2026")
     else:
         bot.reply_to(message, f"❌ Invalid Player ID. Please enter exactly 10 digits (you entered {len(player_id)} digits)")
+
+# ============================================
+# HANDLE PROFILE DATE
+# ============================================
+@bot.message_handler(func=lambda message: user_state.get(message.chat.id, {}).get('step') == 'waiting_profile_date')
+def handle_profile_date(message):
+    user_id = message.chat.id
+    date_str = message.text.strip()
+    
+    # Check date format (DD/MM/YYYY)
+    date_pattern = r'^(\d{2})/(\d{2})/(\d{4})$'
+    match = re.match(date_pattern, date_str)
+    
+    if match:
+        day, month, year = match.groups()
+        # Basic validation
+        if 1 <= int(day) <= 31 and 1 <= int(month) <= 12 and 2000 <= int(year) <= 2100:
+            user_state[user_id]['profile_date'] = date_str
+            user_state[user_id]['step'] = 'waiting_video'
+            bot.reply_to(message, f"✅ Profile Date saved: {date_str}\n\n🎥 Step 3/3: Now send your screen recording video (30-60 seconds)")
+        else:
+            bot.reply_to(message, "❌ Invalid date. Please use DD/MM/YYYY format (e.g., 07/03/2026)")
+    else:
+        bot.reply_to(message, "❌ Invalid format. Please use DD/MM/YYYY (e.g., 07/03/2026)")
 
 # ============================================
 # RECEIVE VIDEO
@@ -104,7 +129,7 @@ def handle_video(message):
         return
     
     if user_state[user_id].get('step') != 'waiting_video':
-        bot.reply_to(message, "Please type your Player ID first using /verify")
+        bot.reply_to(message, "Please complete steps first:\n1. Player ID\n2. Profile Date")
         return
     
     bot.reply_to(message, "📥 Video received! Processing... This may take 30-60 seconds.")
@@ -135,7 +160,7 @@ def extract_text_from_frame(frame):
         return ""
 
 def process_video(user_id, video_path, message):
-    """Extract and verify - using manual Player ID"""
+    """Extract and verify - using manual Player ID and Date"""
     try:
         # Get video duration
         cap = cv2.VideoCapture(video_path)
@@ -154,10 +179,10 @@ def process_video(user_id, video_path, message):
         frames = extract_frames(video_path, timestamps)
         print(f"Extracted {len(frames)} frames")
         
-        # Initialize extracted data
+        # Initialize extracted data with MANUAL entries
         extracted_data = {
-            'player_id': user_state[user_id]['player_id'],  # Manual entry
-            'profile_date': None,
+            'player_id': user_state[user_id]['player_id'],      # Manual
+            'profile_date': user_state[user_id]['profile_date'], # Manual
             'email_date': None,
             'email_lines': [],
             'ad_text': "",
@@ -171,13 +196,6 @@ def process_video(user_id, video_path, message):
             if not text or len(text) < 10:
                 continue
             
-            # Extract Profile Date (DD/MM/YYYY)
-            if not extracted_data['profile_date']:
-                date_match = re.search(r'(\d{2}[/-]\d{2}[/-]\d{4})', text)
-                if date_match:
-                    extracted_data['profile_date'] = date_match.group(1).replace('-', '/')
-                    print(f"✅ Found Profile Date: {extracted_data['profile_date']}")
-            
             # Extract Email Date (Month DD, YYYY)
             if not extracted_data['email_date']:
                 email_date_match = re.search(r'([A-Z][a-z]+ \d{1,2}, \d{4})', text)
@@ -187,7 +205,7 @@ def process_video(user_id, video_path, message):
             
             # Collect email lines
             keywords = ['gold', 'stansberry', 'cramer', 'investment', 'stock', 'dear reader', 
-                        'market', 'trade', 'club', 'elite', 'price']
+                        'market', 'trade', 'club', 'elite', 'price', 'stocks', 'fund']
             if any(keyword in text.lower() for keyword in keywords):
                 lines = [line.strip() for line in text.split('\n') if len(line.strip()) > 15]
                 extracted_data['email_lines'].extend(lines)
@@ -202,7 +220,7 @@ def process_video(user_id, video_path, message):
         extracted_data['email_lines'] = list(dict.fromkeys(extracted_data['email_lines']))
         
         print(f"Manual Player ID: {extracted_data['player_id']}")
-        print(f"Profile Date: {extracted_data['profile_date']}")
+        print(f"Manual Profile Date: {extracted_data['profile_date']}")
         print(f"Email Date: {extracted_data['email_date']}")
         print(f"Email lines: {len(extracted_data['email_lines'])}")
         
@@ -215,7 +233,7 @@ def process_video(user_id, video_path, message):
 ✅ VERIFICATION SUCCESSFUL
 ━━━━━━━━━━━━━━━━━━━━━━
 👤 User: @{user_state[user_id]['username'] or 'N/A'}
-👤 Player ID: {extracted_data['player_id']} (manual)
+👤 Player ID: {extracted_data['player_id']}
 📅 Profile Date: {extracted_data['profile_date']}
 📧 Email Date: {extracted_data['email_date']}
 📊 Match: {verification_result['match_score']}%
@@ -243,7 +261,6 @@ Thank you for your patience!
 Reason: {verification_result['reason']}
 
 Please record again showing:
-• Profile screen with date
 • Full email content (scroll slowly)
 • Ad page after clicking link
             """)
@@ -264,9 +281,6 @@ def verify_extracted_data(extracted):
     """Match extracted data with Firebase templates"""
     
     # Check required fields
-    if not extracted['profile_date']:
-        return {'verified': False, 'reason': 'Profile date not found - show DD/MM/YYYY'}
-    
     if not extracted['email_date']:
         return {'verified': False, 'reason': 'Email date not found - show Month DD, YYYY'}
     
@@ -301,7 +315,7 @@ def verify_extracted_data(extracted):
                     matching_lines.append(t_line)
                     break
     
-    # Date match (allow ±1 day)
+    # Date match (allow ±1 day) - using manual profile date
     date_match = dates_match(extracted['profile_date'], extracted['email_date'])
     
     # Ad page match
@@ -397,7 +411,7 @@ def save_email(message):
 # ============================================
 print("=" * 50)
 print("🤖 ApnaJeet Video Verification Bot")
-print("✅ Version: 3.0 (Manual Player ID)")
+print("✅ Version: 4.0 (Fully Manual)")
 print(f"✅ Admin Chat ID: {ADMIN_CHAT_ID}")
 print("=" * 50)
 
