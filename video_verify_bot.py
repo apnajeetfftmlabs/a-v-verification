@@ -2,23 +2,13 @@ import telebot
 import firebase_admin
 from firebase_admin import db, credentials
 import cv2
-import easyocr
+import pytesseract  # ✅ Change here
 import numpy as np
 import re
 import time
 from datetime import datetime, timedelta
 import os
 import json
-
-# ============================================
-# 🔥 INITIALIZE EASYOCR (No Tesseract needed)
-# ============================================
-try:
-    reader = easyocr.Reader(['en'])  # English only
-    print("✅ EasyOCR initialized successfully")
-except Exception as e:
-    print(f"❌ EasyOCR initialization failed: {e}")
-    reader = None
 
 # ============================================
 # 🔥 CONFIG
@@ -45,6 +35,15 @@ try:
     
 except Exception as e:
     print(f"❌ Firebase error: {e}")
+
+# ============================================
+# 🔥 TESSERACT SETUP
+# ============================================
+try:
+    pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
+    print("✅ Tesseract configured")
+except Exception as e:
+    print(f"⚠️ Tesseract error: {e}")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 user_state = {}
@@ -97,17 +96,15 @@ def handle_video(message):
     # Process video
     process_video(user_id, video_path, message)
 
-def extract_text_from_frame_easyocr(frame):
-    """Extract text using EasyOCR (more reliable)"""
-    if reader is None:
-        return ""
+def extract_text_from_frame(frame):
+    """Extract text using pytesseract"""
     try:
-        # Convert frame to RGB (EasyOCR expects RGB)
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = reader.readtext(rgb_frame, detail=0, paragraph=False)
-        return " ".join(results)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
+        text = pytesseract.image_to_string(thresh)
+        return text
     except Exception as e:
-        print(f"EasyOCR error: {e}")
+        print(f"OCR Error: {e}")
         return ""
 
 def process_video(user_id, video_path, message):
@@ -126,21 +123,20 @@ def process_video(user_id, video_path, message):
             'confidence': 0
         }
         
-        # Process each frame with EasyOCR
+        # Process each frame
         for frame in frames:
-            text = extract_text_from_frame_easyocr(frame)
+            text = extract_text_from_frame(frame)
             
             # Skip if no text
             if not text:
                 continue
             
-            # 1. Extract Player ID (10 digits) - multiple patterns
+            # 1. Extract Player ID (10 digits)
             if not extracted_data['player_id']:
                 patterns = [
                     r'(\d{10})',
                     r'ID[:\s]*(\d{10})',
                     r'Player[:\s]*ID[:\s]*(\d{10})',
-                    r'(\d{3}[-.\s]?\d{3}[-.\s]?\d{4})'
                 ]
                 for pattern in patterns:
                     match = re.search(pattern, text, re.IGNORECASE)
@@ -149,7 +145,7 @@ def process_video(user_id, video_path, message):
                         print(f"✅ Found Player ID: {extracted_data['player_id']}")
                         break
             
-            # 2. Extract Profile Date (DD/MM/YYYY)
+            # 2. Extract Profile Date
             if not extracted_data['profile_date']:
                 date_match = re.search(r'(\d{2}[/-]\d{2}[/-]\d{4})', text)
                 if date_match:
@@ -264,9 +260,12 @@ def verify_extracted_data(extracted):
         t_clean = t_line.lower().strip()
         for e_line in extracted['email_lines']:
             e_clean = e_line.lower().strip()
-            # Check if line contains key parts
             if len(t_clean) > 15 and len(e_clean) > 15:
-                # Simple word overlap
+                # Check if line contains key parts
+                if t_clean in e_clean or e_clean in t_clean:
+                    matching_lines.append(t_line)
+                    break
+                # Or check word overlap
                 t_words = set(t_clean.split())
                 e_words = set(e_clean.split())
                 common = t_words.intersection(e_words)
@@ -365,7 +364,7 @@ def save_email(message):
 # START BOT
 # ============================================
 print("=" * 40)
-print("🤖 Bot Started with EasyOCR")
+print("🤖 Bot Started with Pytesseract")
 print(f"✅ Admin: {ADMIN_CHAT_ID}")
 print("=" * 40)
 
