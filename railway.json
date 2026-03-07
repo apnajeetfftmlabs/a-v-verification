@@ -3,8 +3,15 @@
     "builder": "NIXPACKS",
     "nixPkgs": [
       "python311",
+      "tesseract",
+      "tesseract.eng",
       "openssl",
       "pkg-config"
+    ],
+    "aptPkgs": [
+      "tesseract-ocr",
+      "tesseract-ocr-eng",
+      "libtesseract-dev"
     ],
     "python": {
       "version": "3.11"
