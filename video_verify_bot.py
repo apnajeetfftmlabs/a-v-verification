@@ -2,7 +2,7 @@ import telebot
 import firebase_admin
 from firebase_admin import db, credentials
 import cv2
-import pytesseract
+import easyocr
 import numpy as np
 import re
 import time
@@ -11,28 +11,14 @@ import os
 import json
 
 # ============================================
-# 🔥 FIX TESSERACT PATH
+# 🔥 INITIALIZE EASYOCR (No Tesseract needed)
 # ============================================
 try:
-    pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
-    if os.path.exists('/usr/bin/tesseract'):
-        print("✅ Tesseract found")
-    else:
-        print("⚠️ Tesseract not found")
-        
-    possible_paths = [
-        '/usr/share/tesseract-ocr/5/tessdata/',
-        '/usr/share/tesseract-ocr/4.00/tessdata/',
-        '/usr/share/tesseract-ocr/tessdata/'
-    ]
-    
-    for path in possible_paths:
-        if os.path.exists(path):
-            os.environ['TESSDATA_PREFIX'] = path
-            print(f"✅ TESSDATA_PREFIX set")
-            break
+    reader = easyocr.Reader(['en'])  # English only
+    print("✅ EasyOCR initialized successfully")
 except Exception as e:
-    print(f"⚠️ Error: {e}")
+    print(f"❌ EasyOCR initialization failed: {e}")
+    reader = None
 
 # ============================================
 # 🔥 CONFIG
@@ -111,6 +97,19 @@ def handle_video(message):
     # Process video
     process_video(user_id, video_path, message)
 
+def extract_text_from_frame_easyocr(frame):
+    """Extract text using EasyOCR (more reliable)"""
+    if reader is None:
+        return ""
+    try:
+        # Convert frame to RGB (EasyOCR expects RGB)
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = reader.readtext(rgb_frame, detail=0, paragraph=False)
+        return " ".join(results)
+    except Exception as e:
+        print(f"EasyOCR error: {e}")
+        return ""
+
 def process_video(user_id, video_path, message):
     """Extract and verify without requiring player ID in Firebase"""
     try:
@@ -127,34 +126,37 @@ def process_video(user_id, video_path, message):
             'confidence': 0
         }
         
-        # Process each frame
+        # Process each frame with EasyOCR
         for frame in frames:
-            text = extract_text_from_frame(frame)
+            text = extract_text_from_frame_easyocr(frame)
             
-            # 1. Extract Player ID (10 digits) - more flexible regex
+            # Skip if no text
+            if not text:
+                continue
+            
+            # 1. Extract Player ID (10 digits) - multiple patterns
             if not extracted_data['player_id']:
-                # Match 10 digits with possible spaces/dashes
                 patterns = [
-                    r'(\d{10})',  # 1234567890
-                    r'(\d{3}[-\s]?\d{3}[-\s]?\d{4})',  # 123-456-7890
-                    r'ID[:\s]*(\d{10})',  # ID: 1234567890
-                    r'Player[:\s]*ID[:\s]*(\d{10})'  # Player ID: 1234567890
+                    r'(\d{10})',
+                    r'ID[:\s]*(\d{10})',
+                    r'Player[:\s]*ID[:\s]*(\d{10})',
+                    r'(\d{3}[-.\s]?\d{3}[-.\s]?\d{4})'
                 ]
                 for pattern in patterns:
                     match = re.search(pattern, text, re.IGNORECASE)
                     if match:
-                        extracted_data['player_id'] = match.group(1).replace('-', '').replace(' ', '')
+                        extracted_data['player_id'] = re.sub(r'[^0-9]', '', match.group(1))
                         print(f"✅ Found Player ID: {extracted_data['player_id']}")
                         break
             
             # 2. Extract Profile Date (DD/MM/YYYY)
             if not extracted_data['profile_date']:
-                date_match = re.search(r'(\d{2}/\d{2}/\d{4})', text)
+                date_match = re.search(r'(\d{2}[/-]\d{2}[/-]\d{4})', text)
                 if date_match:
-                    extracted_data['profile_date'] = date_match.group(1)
+                    extracted_data['profile_date'] = date_match.group(1).replace('-', '/')
                     print(f"✅ Found Profile Date: {extracted_data['profile_date']}")
             
-            # 3. Extract Email Date (Month DD, YYYY)
+            # 3. Extract Email Date
             if not extracted_data['email_date']:
                 email_date_match = re.search(r'([A-Z][a-z]+ \d{1,2}, \d{4})', text)
                 if email_date_match:
@@ -162,15 +164,17 @@ def process_video(user_id, video_path, message):
                     print(f"✅ Found Email Date: {extracted_data['email_date']}")
             
             # 4. Collect email lines
-            if any(keyword in text.lower() for keyword in ['gold', 'stansberry', 'cramer', 'investment', 'stock']):
-                lines = [line.strip() for line in text.split('\n') if line.strip()]
+            keywords = ['gold', 'stansberry', 'cramer', 'investment', 'stock', 'dear reader']
+            if any(keyword in text.lower() for keyword in keywords):
+                lines = [line.strip() for line in text.split('\n') if len(line.strip()) > 10]
                 extracted_data['email_lines'].extend(lines)
             
             # 5. Collect ad text
-            if 'elite trade club' in text.lower() or 'start your day' in text.lower():
+            ad_keywords = ['elite trade club', 'start your day', 'pre-market report']
+            if any(keyword in text.lower() for keyword in ad_keywords):
                 extracted_data['ad_text'] += text + "\n"
         
-        # Remove duplicates from email lines
+        # Remove duplicates
         extracted_data['email_lines'] = list(dict.fromkeys(extracted_data['email_lines']))
         
         # Verify with Firebase
@@ -178,16 +182,15 @@ def process_video(user_id, video_path, message):
         
         # Prepare result message
         if verification_result['verified']:
-            # Send to admin group
             admin_msg = f"""
 ✅ VERIFICATION SUCCESSFUL
 ━━━━━━━━━━━━━━━━━━━━━━
-👤 User: @{extracted_data['player_id']}
+👤 Player ID: {extracted_data['player_id']}
 📅 Profile Date: {extracted_data['profile_date']}
 📧 Email Date: {extracted_data['email_date']}
-📊 Match Score: {verification_result['match_score']}%
-📝 Lines Matched: {verification_result['matching_lines']}
-🔗 Ad Page: {verification_result['ad_match']}%
+📊 Match: {verification_result['match_score']}%
+📝 Lines: {verification_result['matching_lines']}
+🔗 Ad: {verification_result['ad_match']}
 
 ⏰ {datetime.now().strftime('%H:%M:%S')}
 
@@ -209,7 +212,7 @@ Admin will add coins.
 Reason: {verification_result['reason']}
 
 Please record again showing:
-• Profile screen
+• Profile screen clearly
 • Full email content
 • Ad page
             """)
@@ -230,8 +233,8 @@ def verify_extracted_data(extracted):
     """Match extracted data with Firebase templates"""
     
     # Check required fields
-    if not extracted['player_id']:
-        return {'verified': False, 'reason': 'Player ID not clear. Make sure 10-digit number visible'}
+    if not extracted['player_id'] or len(extracted['player_id']) != 10:
+        return {'verified': False, 'reason': 'Player ID not clear (need 10 digits)'}
     
     if not extracted['profile_date']:
         return {'verified': False, 'reason': 'Profile date not found'}
@@ -239,8 +242,8 @@ def verify_extracted_data(extracted):
     if not extracted['email_date']:
         return {'verified': False, 'reason': 'Email date not found'}
     
-    if len(extracted['email_lines']) < 5:
-        return {'verified': False, 'reason': f'Only {len(extracted["email_lines"])} lines found. Need more'}
+    if len(extracted['email_lines']) < 3:
+        return {'verified': False, 'reason': f'Only {len(extracted["email_lines"])} lines found'}
     
     # Get templates from Firebase
     today = datetime.now().strftime('%Y-%m-%d')
@@ -258,16 +261,20 @@ def verify_extracted_data(extracted):
     matching_lines = []
     
     for t_line in template_lines:
+        t_clean = t_line.lower().strip()
         for e_line in extracted['email_lines']:
-            if len(t_line) > 10 and len(e_line) > 10:
-                # Simple similarity check
-                common = sum(1 for a, b in zip(t_line.lower(), e_line.lower()) if a == b)
-                similarity = common / max(len(t_line), len(e_line))
-                if similarity > 0.6:
+            e_clean = e_line.lower().strip()
+            # Check if line contains key parts
+            if len(t_clean) > 15 and len(e_clean) > 15:
+                # Simple word overlap
+                t_words = set(t_clean.split())
+                e_words = set(e_clean.split())
+                common = t_words.intersection(e_words)
+                if len(common) >= 3:
                     matching_lines.append(t_line)
                     break
     
-    # Date match (allow ±1 day)
+    # Date match
     date_match = dates_match(extracted['profile_date'], extracted['email_date'])
     
     # Ad page match
@@ -278,13 +285,13 @@ def verify_extracted_data(extracted):
         for phrase in required:
             if phrase.lower() in extracted['ad_text'].lower():
                 ad_phrases += 1
-        ad_match = ad_phrases >= len(required) * 0.6
+        ad_match = ad_phrases >= len(required) * 0.5
     
     # Calculate score
     match_score = len(matching_lines) / len(template_lines) * 100 if template_lines else 0
     
     # Decision
-    if match_score >= 30 and date_match and ad_match:
+    if match_score >= 20 and date_match and ad_match:
         return {
             'verified': True,
             'match_score': round(match_score, 1),
@@ -293,12 +300,12 @@ def verify_extracted_data(extracted):
         }
     else:
         reasons = []
-        if match_score < 30:
-            reasons.append(f"Low match ({round(match_score,1)}%)")
+        if match_score < 20:
+            reasons.append("Email mismatch")
         if not date_match:
             reasons.append("Date mismatch")
         if not ad_match:
-            reasons.append("Ad page mismatch")
+            reasons.append("Ad mismatch")
         
         return {'verified': False, 'reason': ', '.join(reasons)}
 
@@ -319,11 +326,6 @@ def extract_frames(video_path, timestamps):
     
     cap.release()
     return frames
-
-def extract_text_from_frame(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
-    return pytesseract.image_to_string(thresh)
 
 def dates_match(profile_date, email_date):
     try:
@@ -359,18 +361,11 @@ def save_email(message):
     
     bot.reply_to(message, f"✅ Saved! {len(lines)} lines")
 
-@bot.message_handler(commands=['stats'])
-def admin_stats(message):
-    if message.chat.id != int(ADMIN_CHAT_ID):
-        return
-    
-    bot.send_message(message.chat.id, "📊 Bot is running!")
-
 # ============================================
 # START BOT
 # ============================================
 print("=" * 40)
-print("🤖 Bot Started")
+print("🤖 Bot Started with EasyOCR")
 print(f"✅ Admin: {ADMIN_CHAT_ID}")
 print("=" * 40)
 
