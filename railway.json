@@ -2,21 +2,9 @@
   "build": {
     "builder": "NIXPACKS",
     "nixPkgs": [
-      "tesseract",
-      "tesseract.eng",
+      "python311",
       "openssl",
-      "pkg-config",
-      "libGL",
-      "mesa",
-      "ffmpeg"
-    ],
-    "aptPkgs": [
-      "tesseract-ocr",
-      "tesseract-ocr-eng",
-      "libtesseract-dev",
-      "libleptonica-dev",
-      "libgl1-mesa-glx",
-      "libglib2.0-0"
+      "pkg-config"
     ],
     "python": {
       "version": "3.11"
