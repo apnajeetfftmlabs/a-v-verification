@@ -10,7 +10,7 @@ from datetime import datetime
 # ============================================
 BOT_TOKEN = "8601876917:AAFuvwzoWbBsUZr26Q-svPnsxcdYop-yYds"
 ADMIN_CHAT_ID = "-1003804079056"
-HF_SPACE_URL = "https://dailyupdate8399-apnajeet-video-verifier.hf.space/api/predict"
+HF_SPACE_URL = "https://dailyupdate8399-apnajeet-video-verifier.hf.space"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -212,3 +212,4 @@ if __name__ == "__main__":
     # Start bot
     print("\n🟢 Bot is running...")
     bot.infinity_polling(timeout=60)
+
